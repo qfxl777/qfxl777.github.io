@@ -1,0 +1,12 @@
+hover-tilt 1.0.0
+Copyright (c) 2025-2026 Simon Goellner / Simeydotme
+Project: https://github.com/simeydotme/hover-tilt
+
+The published package identifies this component as MPL-2.0. The repository
+root LICENSE currently contains the MIT License. Both notices are retained in
+this vendor directory to avoid weakening either stated set of terms.
+
+Local modification:
+- Removed the final ESM export statement so the Web Component can run as a
+  classic script when this static website is opened using file://.
+- No component behavior was changed.
