@@ -252,6 +252,16 @@
 
     var flipper = document.createElement('div');
     flipper.className = 'card-popover-flipper is-flip-settled';
+    /* All iOS browsers and desktop Safari use WebKit. Add a narrow edge-on
+       visibility gate there to prevent stale compositor frames during flips. */
+    var ua = navigator.userAgent;
+    var isIOSWebKit = /iP(?:ad|hone|od)/i.test(ua) ||
+      (/Macintosh/i.test(ua) && navigator.maxTouchPoints > 1);
+    var isDesktopSafari = /Safari/i.test(ua) &&
+      !/(?:Chrome|Chromium|CriOS|Edg|OPR|FxiOS|Android)/i.test(ua);
+    if (isIOSWebKit || isDesktopSafari) {
+      flipper.classList.add('is-webkit-flip');
+    }
 
     var front = document.createElement('div');
     front.className = 'card-popover-face card-popover-front';
@@ -316,8 +326,8 @@
 
     function settleFlip() {
       window.clearTimeout(flipSettleTimer);
-      flipper.classList.remove('is-flipping');
       flipper.classList.add('is-flip-settled');
+      flipper.classList.remove('is-flipping', 'is-flip-to-back', 'is-flip-to-front');
       flip.disabled = false;
     }
 
@@ -334,6 +344,8 @@
          continuous for the full transform and are cleaned up only at rest. */
       flipper.classList.remove('is-flip-settled');
       flipper.classList.add('is-flipping');
+      flipper.classList.remove('is-flip-to-back', 'is-flip-to-front');
+      flipper.classList.add(isFlipped ? 'is-flip-to-back' : 'is-flip-to-front');
       flip.disabled = true;
 
       /* Flush the revealed planes once, then start the transform immediately.

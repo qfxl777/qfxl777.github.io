@@ -45,9 +45,13 @@
   };
 
   var particles = [];
+  var backgroundParticles = [];
+  var foregroundParticles = [];
   var size = { width: 0, height: 0, dpr: 1 };
   var animationFrame = 0;
   var lastTime = performance.now();
+  var lastRenderTime = 0;
+  var minFrameInterval = 1000 / 60;
   var isVisible = true;
   var home = document.getElementById('home');
   var reducedMotion = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
@@ -156,6 +160,13 @@
   function fadeContext(context) {
     context.setTransform(size.dpr, 0, 0, size.dpr, 0, 0);
     context.globalAlpha = 1;
+    /* With trail disabled, destination-out is visually identical to a clear,
+       but considerably more expensive on some Windows GPU/driver paths. */
+    if (config.trail <= 0) {
+      context.globalCompositeOperation = 'source-over';
+      context.clearRect(0, 0, size.width, size.height);
+      return;
+    }
     context.globalCompositeOperation = 'destination-out';
     var trailAlpha = Math.max(.02, 1 - (Math.max(0, config.trail) / 50) * .98);
     context.fillStyle = 'rgba(0,0,0,' + trailAlpha + ')';
@@ -163,35 +174,86 @@
     context.globalCompositeOperation = 'source-over';
   }
 
+  function colorWithAlpha(color, alpha) {
+    var value = String(color || '#ffffff').trim();
+    var shortHex = /^#([0-9a-f]{3})$/i.exec(value);
+    var fullHex = /^#([0-9a-f]{6})$/i.exec(value);
+    var red = 255;
+    var green = 255;
+    var blue = 255;
+
+    if (shortHex) {
+      red = parseInt(shortHex[1][0] + shortHex[1][0], 16);
+      green = parseInt(shortHex[1][1] + shortHex[1][1], 16);
+      blue = parseInt(shortHex[1][2] + shortHex[1][2], 16);
+    } else if (fullHex) {
+      red = parseInt(fullHex[1].slice(0, 2), 16);
+      green = parseInt(fullHex[1].slice(2, 4), 16);
+      blue = parseInt(fullHex[1].slice(4, 6), 16);
+    }
+
+    return 'rgba(' + red + ',' + green + ',' + blue + ',' + Math.max(0, Math.min(1, alpha)) + ')';
+  }
+
+  function drawTaperedTrail(context, particle, widthScale, alphaScale) {
+    var points = particle.trailPoints;
+    var lastIndex = points.length - 1;
+    if (lastIndex < 1) return;
+
+    var leftEdge = particle.trailLeftCache;
+    var rightEdge = particle.trailRightCache;
+    if (!leftEdge || leftEdge.length !== points.length) {
+      leftEdge = particle.trailLeftCache = Array.from({ length: points.length }, function () { return {}; });
+      rightEdge = particle.trailRightCache = Array.from({ length: points.length }, function () { return {}; });
+    }
+
+    for (var index = 0; index <= lastIndex; index += 1) {
+      var previous = points[Math.max(0, index - 1)];
+      var next = points[Math.min(lastIndex, index + 1)];
+      var tangentX = next.x - previous.x;
+      var tangentY = next.y - previous.y;
+      var tangentLength = Math.sqrt(tangentX * tangentX + tangentY * tangentY) || 1;
+      var progress = index / lastIndex;
+      /* A continuous eased taper: full width at the particle, nearly zero at the tail. */
+      var taper = Math.pow(1 - progress, .82);
+      var halfWidth = Math.max(.025, particle.size * config.arcWidth * widthScale * taper * .5);
+      var normalX = -tangentY / tangentLength;
+      var normalY = tangentX / tangentLength;
+      leftEdge[index].x = points[index].x + normalX * halfWidth;
+      leftEdge[index].y = points[index].y + normalY * halfWidth;
+      rightEdge[index].x = points[index].x - normalX * halfWidth;
+      rightEdge[index].y = points[index].y - normalY * halfWidth;
+    }
+
+    var gradient = context.createLinearGradient(points[0].x, points[0].y, points[lastIndex].x, points[lastIndex].y);
+    gradient.addColorStop(0, colorWithAlpha(particle.color, 1));
+    gradient.addColorStop(.28, colorWithAlpha(particle.color, .82));
+    gradient.addColorStop(.68, colorWithAlpha(particle.color, .32));
+    gradient.addColorStop(1, colorWithAlpha(particle.color, 0));
+
+    context.beginPath();
+    context.moveTo(leftEdge[0].x, leftEdge[0].y);
+    for (var leftIndex = 1; leftIndex <= lastIndex; leftIndex += 1) {
+      context.lineTo(leftEdge[leftIndex].x, leftEdge[leftIndex].y);
+    }
+    for (var rightIndex = lastIndex; rightIndex >= 0; rightIndex -= 1) {
+      context.lineTo(rightEdge[rightIndex].x, rightEdge[rightIndex].y);
+    }
+    context.closePath();
+    context.globalAlpha = particle.alpha * particle.glow * config.arcBrightness * alphaScale;
+    context.fillStyle = gradient;
+    context.fill();
+  }
+
   function drawParticles(context, list) {
     for (var i = 0; i < list.length; i += 1) {
       var particle = list[i];
       context.fillStyle = particle.color;
       if (particle.glow > .01 && particle.trailPoints && particle.trailPoints.length > 1) {
-        context.strokeStyle = particle.color;
-        context.lineCap = 'round';
-        context.lineJoin = 'round';
-
-        for (var trailIndex = 1; trailIndex < particle.trailPoints.length; trailIndex += 1) {
-          var trailProgress = trailIndex / (particle.trailPoints.length - 1);
-          var from = particle.trailPoints[trailIndex - 1];
-          var to = particle.trailPoints[trailIndex];
-          var segmentAlpha = (1 - trailProgress) * particle.alpha * particle.glow * config.arcBrightness;
-
-          context.globalAlpha = segmentAlpha * .16;
-          context.lineWidth = Math.max(.5, particle.size * config.arcWidth * 2.8 * (1 - trailProgress * .38));
-          context.beginPath();
-          context.moveTo(from.x, from.y);
-          context.lineTo(to.x, to.y);
-          context.stroke();
-
-          context.globalAlpha = segmentAlpha * .72;
-          context.lineWidth = Math.max(.28, particle.size * config.arcWidth * (1 - trailProgress * .48));
-          context.beginPath();
-          context.moveTo(from.x, from.y);
-          context.lineTo(to.x, to.y);
-          context.stroke();
-        }
+        /* Two continuous tapered ribbons replace the former banded strokes:
+           a soft outer glow and a crisp core, both fading smoothly to zero. */
+        drawTaperedTrail(context, particle, 3.1, .17);
+        drawTaperedTrail(context, particle, 1.05, .78);
       }
       if (particle.glow > .01) {
         context.globalAlpha = particle.alpha * particle.glow * .1 * config.arcBrightness;
@@ -207,7 +269,7 @@
     context.globalAlpha = 1;
   }
 
-  function projectOrbitPoint(point, angle, cx, cy, cosTilt, sinTilt, cosSide, sinSide, radiusOverride) {
+  function projectOrbitPoint(point, angle, cx, cy, cosTilt, sinTilt, cosSide, sinSide, radiusOverride, output) {
     var radius = Number.isFinite(radiusOverride) ? radiusOverride : point.radius;
     var xBase = radius * Math.cos(angle);
     var yBase = point.height;
@@ -217,12 +279,12 @@
     var x3d = xBase * cosSide - yTilted * sinSide;
     var y3d = xBase * sinSide + yTilted * cosSide;
     var projectionScale = config.perspective / (config.perspective + zTilted);
-    return {
-      x: cx + x3d * projectionScale,
-      y: cy + y3d * projectionScale,
-      z: zTilted,
-      scale: projectionScale
-    };
+    var projected = output || {};
+    projected.x = cx + x3d * projectionScale;
+    projected.y = cy + y3d * projectionScale;
+    projected.z = zTilted;
+    projected.scale = projectionScale;
+    return projected;
   }
 
   function drawVoid(cx, cy) {
@@ -329,6 +391,17 @@
     animationFrame = requestAnimationFrame(render);
     if (!isVisible || document.hidden || !size.width) return;
 
+    /* A 120/144 Hz display used to run the full simulation at panel refresh
+       rate. A stable 60 fps retains the intended motion while avoiding two or
+       three duplicate full-canvas renders on high-refresh Windows laptops. */
+    if (lastRenderTime && now - lastRenderTime < minFrameInterval - .75) return;
+    /* Advance on a fixed 60 Hz timeline instead of snapping to `now`. On
+       144 Hz panels this alternates skipped frames and averages near 60 fps,
+       rather than falling into a rigid 48 fps every-third-frame cadence. */
+    lastRenderTime = lastRenderTime
+      ? Math.min(now, lastRenderTime + minFrameInterval)
+      : now;
+
     var delta = Math.min((now - lastTime) / 16.667, 3);
     lastTime = now;
 
@@ -350,8 +423,8 @@
     var cx = size.width * (config.centerX / 100);
     var cy = size.height * (config.centerY / 100);
     var outer = outerRadius();
-    var background = [];
-    var foreground = [];
+    backgroundParticles.length = 0;
+    foregroundParticles.length = 0;
     var tilt = config.tilt * Math.PI / 180;
     var sideway = config.tiltSideway * Math.PI / 180;
     var cosTilt = Math.cos(tilt);
@@ -379,7 +452,18 @@
       var displayRadius = introActive
         ? Math.min(point.radius + introRadiusOffset, Math.max(point.radius, introMaxRadius))
         : point.radius;
-      var currentProjection = projectOrbitPoint(point, point.angle, cx, cy, cosTilt, sinTilt, cosSide, sinSide, displayRadius);
+      var currentProjection = projectOrbitPoint(
+        point,
+        point.angle,
+        cx,
+        cy,
+        cosTilt,
+        sinTilt,
+        cosSide,
+        sinSide,
+        displayRadius,
+        point.currentProjection || (point.currentProjection = {})
+      );
       var x = currentProjection.x;
       var y = currentProjection.y;
       var z1 = currentProjection.z;
@@ -403,36 +487,49 @@
 
       var trailPoints = null;
       if (point.arcGlow > .008 && config.arcLength > 0) {
-        trailPoints = [];
         var segmentCount = Math.max(2, Math.min(16, Math.round(config.arcSegments)));
+        if (!point.trailCache || point.trailCache.length !== segmentCount + 1) {
+          point.trailCache = Array.from({ length: segmentCount + 1 }, function () { return {}; });
+        }
+        trailPoints = point.trailCache;
         var arcRadians = Math.max(0, config.arcLength) * Math.PI / 180;
         var orbitDirection = config.orbitSpeed >= 0 ? -1 : 1;
         for (var arcIndex = 0; arcIndex <= segmentCount; arcIndex += 1) {
           var arcProgress = arcIndex / segmentCount;
           var sampleAngle = point.angle + orbitDirection * arcRadians * arcProgress;
-          trailPoints.push(projectOrbitPoint(point, sampleAngle, cx, cy, cosTilt, sinTilt, cosSide, sinSide, displayRadius));
+          projectOrbitPoint(
+            point,
+            sampleAngle,
+            cx,
+            cy,
+            cosTilt,
+            sinTilt,
+            cosSide,
+            sinSide,
+            displayRadius,
+            trailPoints[arcIndex]
+          );
         }
       }
       if (x < -30 || x > size.width + 30 || y < -30 || y > size.height + 30) continue;
 
-      var projected = {
-        x: x,
-        y: y,
-        z: z1,
-        size: Math.max(.3, particleSize * scale),
-        alpha: Math.max(.35, 1 - ((z1 + outer) / (2 * outer)) * .45) * introParticleOpacity,
-        glow: Math.max(0, Math.min(1, point.arcGlow)),
-        trailPoints: trailPoints,
-        color: config.colors[point.colorIdx % config.colors.length]
-      };
-      (z1 >= 0 ? background : foreground).push(projected);
+      var projected = point.renderedParticle || (point.renderedParticle = {});
+      projected.x = x;
+      projected.y = y;
+      projected.z = z1;
+      projected.size = Math.max(.3, particleSize * scale);
+      projected.alpha = Math.max(.35, 1 - ((z1 + outer) / (2 * outer)) * .45) * introParticleOpacity;
+      projected.glow = Math.max(0, Math.min(1, point.arcGlow));
+      projected.trailPoints = trailPoints;
+      projected.color = config.colors[point.colorIdx % config.colors.length];
+      (z1 >= 0 ? backgroundParticles : foregroundParticles).push(projected);
     }
 
-    background.sort(function (a, b) { return b.z - a.z; });
-    foreground.sort(function (a, b) { return b.z - a.z; });
-    drawParticles(back, background);
+    backgroundParticles.sort(function (a, b) { return b.z - a.z; });
+    foregroundParticles.sort(function (a, b) { return b.z - a.z; });
+    drawParticles(back, backgroundParticles);
     if (config.showCenter) drawVoid(cx, cy);
-    drawParticles(front, foreground);
+    drawParticles(front, foregroundParticles);
     drawLogoParticleState(now, cx, cy, delta);
     drawIntroPulse(cx, cy);
   }

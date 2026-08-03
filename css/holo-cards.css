@@ -1049,8 +1049,8 @@ body.card-popover-open {
 .card-popover-flipper {
   position: absolute;
   inset: 0;
-  -webkit-transform: translateZ(0);
-  transform: translateZ(0);
+  -webkit-transform: translate3d(0, 0, 0);
+  transform: translate3d(0, 0, 0);
   transform-style: preserve-3d;
   -webkit-transform-style: preserve-3d;
   will-change: transform;
@@ -1062,8 +1062,8 @@ body.card-popover-open {
 }
 
 .card-popover-flipper.is-flipped {
-  -webkit-transform: translateZ(0) rotateY(180deg);
-  transform: translateZ(0) rotateY(180deg);
+  -webkit-transform: translate3d(0, 0, 0) rotateY(180deg);
+  transform: translate3d(0, 0, 0) rotateY(180deg);
 }
 
 .card-popover-face {
@@ -1072,16 +1072,21 @@ body.card-popover-open {
   border-radius: 5% / 3.6%;
   -webkit-backface-visibility: hidden;
   backface-visibility: hidden;
-  transform-style: preserve-3d;
-  -webkit-transform-style: preserve-3d;
-  will-change: transform, opacity;
+  /* Flatten each complete face into one composited plane. Safari otherwise
+     promotes the card body's translateZ/glare layers independently and can
+     keep one stale front-facing frame while the parent is turning. */
+  transform-style: flat;
+  -webkit-transform-style: flat;
+  isolation: isolate;
+  will-change: transform;
 }
 
 .card-popover-front {
+  overflow: visible;
   visibility: visible;
   opacity: 1;
-  -webkit-transform: rotateY(0deg) translateZ(0);
-  transform: rotateY(0deg) translateZ(0);
+  -webkit-transform: rotateY(0deg) translateZ(.1px);
+  transform: rotateY(0deg) translateZ(.1px);
 }
 
 .card-popover-front .pricing-tilt-expanded {
@@ -1195,8 +1200,47 @@ body.card-popover-open {
   color: #171b18;
   background: #fffdf6;
   box-shadow: 0 32px 90px rgba(0,0,0,.55);
-  -webkit-transform: rotateY(180deg) translateZ(0);
-  transform: rotateY(180deg) translateZ(0);
+  -webkit-transform: rotateY(180deg) translateZ(.1px);
+  transform: rotateY(180deg) translateZ(.1px);
+}
+
+/* WebKit occasionally ignores backface-visibility for one compositor frame.
+   Gate the two faces only while they are edge-on; the 3D rotation itself stays
+   continuous, but the stale plane never has an opportunity to flash through. */
+@keyframes ssrcat-front-to-back-front-face {
+  0%, 18% { opacity: 1; }
+  22%, 100% { opacity: 0; }
+}
+
+@keyframes ssrcat-front-to-back-back-face {
+  0%, 18% { opacity: 0; }
+  22%, 100% { opacity: 1; }
+}
+
+@keyframes ssrcat-back-to-front-front-face {
+  0%, 18% { opacity: 0; }
+  22%, 100% { opacity: 1; }
+}
+
+@keyframes ssrcat-back-to-front-back-face {
+  0%, 18% { opacity: 1; }
+  22%, 100% { opacity: 0; }
+}
+
+.card-popover-flipper.is-webkit-flip.is-flipping.is-flip-to-back .card-popover-front {
+  animation: ssrcat-front-to-back-front-face .82s linear both;
+}
+
+.card-popover-flipper.is-webkit-flip.is-flipping.is-flip-to-back .card-popover-back {
+  animation: ssrcat-front-to-back-back-face .82s linear both;
+}
+
+.card-popover-flipper.is-webkit-flip.is-flipping.is-flip-to-front .card-popover-front {
+  animation: ssrcat-back-to-front-front-face .82s linear both;
+}
+
+.card-popover-flipper.is-webkit-flip.is-flipping.is-flip-to-front .card-popover-back {
+  animation: ssrcat-back-to-front-back-face .82s linear both;
 }
 
 .card-popover-flipper.is-flip-settled.is-flipped .card-popover-front {

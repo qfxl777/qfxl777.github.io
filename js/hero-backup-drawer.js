@@ -15,6 +15,10 @@
   var platformPlaceholders = menu.querySelectorAll('[data-platform-placeholder]');
   var latestEmailLink = menu.querySelector('[data-copy-email]');
   var bookmarkUrl = 'https://ssrcat.com';
+  var healthCheckEndpoint = 'https://ssrcat-health.qfxl777.workers.dev/';
+  var desktopHover = window.matchMedia('(hover: hover) and (pointer: fine)');
+  var hoverCloseTimer;
+  var pinnedOpen = false;
   var toastTimer;
   if (!trigger || !drawer || !scrollArea || !scrollCue) return;
 
@@ -37,6 +41,22 @@
     setOpen(!menu.classList.contains('is-open'));
   }
 
+  function openFromHover() {
+    if (!desktopHover.matches) return;
+    window.clearTimeout(hoverCloseTimer);
+    if (!menu.classList.contains('is-open')) setOpen(true);
+  }
+
+  function closeFromHover() {
+    if (!desktopHover.matches) return;
+    window.clearTimeout(hoverCloseTimer);
+    hoverCloseTimer = window.setTimeout(function () {
+      if (!pinnedOpen && !menu.matches(':hover') && !menu.contains(document.activeElement)) {
+        setOpen(false, false);
+      }
+    }, 220);
+  }
+
   function setLatencyState(link, state, text) {
     var pill = link.querySelector('.hero-latency-pill');
     var icon = pill && pill.querySelector('i');
@@ -56,7 +76,7 @@
     }, 6500);
     setLatencyState(link, 'testing', '检测');
 
-    fetch('health-check.php?host=' + encodeURIComponent(host) + '&t=' + Date.now(), {
+    fetch(healthCheckEndpoint + '?host=' + encodeURIComponent(host) + '&t=' + Date.now(), {
       cache: 'no-store',
       signal: controller ? controller.signal : undefined
     }).then(function (response) {
@@ -99,22 +119,46 @@
     if (event.button !== undefined && event.button !== 0) return;
     event.preventDefault();
     event.stopPropagation();
-    toggle();
+    /* Hover previews the drawer. The first desktop click pins it open and the
+       second click closes it, even while the pointer remains on the trigger. */
+    if (desktopHover.matches) {
+      if (pinnedOpen) {
+        pinnedOpen = false;
+        setOpen(false, false);
+      } else {
+        pinnedOpen = true;
+        setOpen(true);
+      }
+    } else {
+      toggle();
+    }
   });
 
   trigger.addEventListener('click', function (event) {
     event.stopPropagation();
-    if (event.detail === 0) toggle();
+    if (event.detail === 0) {
+      if (desktopHover.matches) pinnedOpen = !menu.classList.contains('is-open');
+      toggle();
+    }
   });
+
+  menu.addEventListener('pointerenter', openFromHover);
+  menu.addEventListener('pointerleave', closeFromHover);
+  menu.addEventListener('focusin', function () {
+    window.clearTimeout(hoverCloseTimer);
+  });
+  menu.addEventListener('focusout', closeFromHover);
 
   document.addEventListener('click', function (event) {
     if (menu.classList.contains('is-open') && !menu.contains(event.target)) {
+      pinnedOpen = false;
       setOpen(false, false);
     }
   });
 
   document.addEventListener('keydown', function (event) {
     if (event.key === 'Escape' && menu.classList.contains('is-open')) {
+      pinnedOpen = false;
       setOpen(false, true);
     }
   });
